@@ -8,6 +8,12 @@ from torchvision import transforms
 
 from .randaugment import RandAugmentMC
 
+from dataset.origa import get_origa_test_data
+from dataset.origa import get_origa_train_data
+from dataset.origa import get_test_dir
+from dataset.origa import get_train_dir
+
+
 logger = logging.getLogger(__name__)
 
 cifar10_mean = (0.4914, 0.4822, 0.4465)
@@ -17,6 +23,35 @@ cifar100_std = (0.2675, 0.2565, 0.2761)
 normal_mean = (0.5, 0.5, 0.5)
 normal_std = (0.5, 0.5, 0.5)
 
+def get_origa(args):
+    transform_labeled = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomCrop(size=128,
+                              padding=int(128*0.125),
+                              padding_mode='reflect'),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=normal_mean, std=normal_std)
+    ])
+    transform_val = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=normal_mean, std=normal_std)
+    ])
+    base_dataset = get_origa_train_data()
+
+    train_labeled_idxs, train_unlabeled_idxs = x_u_split(
+        args, base_dataset.targets)
+
+    train_labeled_dataset = ORIGASSL(
+        get_train_dir(), train_labeled_idxs,
+        transform=transform_labeled)
+
+    train_unlabeled_dataset = ORIGASSL(
+        get_train_dir(), train_unlabeled_idxs,
+        transform=TransformFixMatch128(mean=normal_mean, std=normal_std))
+
+    test_dataset = get_origa_test_data()
+
+    return train_labeled_dataset, train_unlabeled_dataset, test_dataset
 
 def get_cifar10(args, root):
     transform_labeled = transforms.Compose([
@@ -126,6 +161,50 @@ class TransformFixMatch(object):
         weak = self.weak(x)
         strong = self.strong(x)
         return self.normalize(weak), self.normalize(strong)
+    
+class TransformFixMatch128(object):
+    def __init__(self, mean, std):
+        self.weak = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(size=128,
+                                  padding=int(128*0.125),
+                                  padding_mode='reflect')])
+        self.strong = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(size=128,
+                                  padding=int(128*0.125),
+                                  padding_mode='reflect'),
+            RandAugmentMC(n=2, m=10)])
+        self.normalize = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std)])
+
+    def __call__(self, x):
+        weak = self.weak(x)
+        strong = self.strong(x)
+        return self.normalize(weak), self.normalize(strong)
+    
+class ORIGASSL(datasets.ImageFolder):
+    def __init__(self, root, indexs,
+                 transform=None, target_transform=None):
+        super().__init__(root, transform=transform,
+                         target_transform=target_transform)
+        if indexs is not None:
+            self.imgs = np.array(self.imgs)[indexs]
+            self.imgs = self.imgs.tolist()
+            self.targets = np.array(self.targets)[indexs]
+
+    # def __getitem__(self, index):
+    #     img, target = self.imgs[index], self.targets[index]
+    #     img = Image.fromarray(img)
+
+    #     if self.transform is not None:
+    #         img = self.transform(img)
+
+    #     if self.target_transform is not None:
+    #         target = self.target_transform(target)
+
+    #     return img, target
 
 
 class CIFAR10SSL(datasets.CIFAR10):
@@ -179,4 +258,5 @@ class CIFAR100SSL(datasets.CIFAR100):
 
 
 DATASET_GETTERS = {'cifar10': get_cifar10,
-                   'cifar100': get_cifar100}
+                   'cifar100': get_cifar100,
+                   'origa':get_origa}

@@ -20,6 +20,8 @@ from tqdm import tqdm
 from dataset.cifar import DATASET_GETTERS
 from utils import AverageMeter, accuracy
 
+torch.cuda.empty_cache()
+
 logger = logging.getLogger(__name__)
 best_acc = 0
 
@@ -71,10 +73,10 @@ def main():
                         help='id(s) for CUDA_VISIBLE_DEVICES')
     parser.add_argument('--num-workers', type=int, default=4,
                         help='number of workers')
-    parser.add_argument('--dataset', default='cifar10', type=str,
-                        choices=['cifar10', 'cifar100'],
+    parser.add_argument('--dataset', default='origa', type=str,
+                        choices=['cifar10', 'cifar100', 'origa'],
                         help='dataset name')
-    parser.add_argument('--num-labeled', type=int, default=4000,
+    parser.add_argument('--num-labeled', type=int, default=1000,
                         help='number of labeled data')
     parser.add_argument("--expand-labels", action="store_true",
                         help="expand labels to fit eval steps")
@@ -199,11 +201,21 @@ def main():
             args.model_depth = 29
             args.model_width = 64
 
+    elif args.dataset == 'origa':
+        args.num_classes = 2
+        if args.arch == 'wideresnet':
+            args.model_depth = 28
+            args.model_width = 2
+        elif args.arch == 'resnext':
+            args.model_cardinality = 4
+            args.model_depth = 28
+            args.model_width = 4
+
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()
 
     labeled_dataset, unlabeled_dataset, test_dataset = DATASET_GETTERS[args.dataset](
-        args, './data')
+        args)
 
     if args.local_rank == 0:
         torch.distributed.barrier()
@@ -456,7 +468,7 @@ def test(args, test_loader, model, epoch):
     data_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
-    top5 = AverageMeter()
+    top2 = AverageMeter()
     end = time.time()
 
     if not args.no_progress:
@@ -473,27 +485,27 @@ def test(args, test_loader, model, epoch):
             outputs = model(inputs)
             loss = F.cross_entropy(outputs, targets)
 
-            prec1, prec5 = accuracy(outputs, targets, topk=(1, 5))
+            prec1, prec2 = accuracy(outputs, targets, topk=(1, 2))
             losses.update(loss.item(), inputs.shape[0])
             top1.update(prec1.item(), inputs.shape[0])
-            top5.update(prec5.item(), inputs.shape[0])
+            top2.update(prec2.item(), inputs.shape[0])
             batch_time.update(time.time() - end)
             end = time.time()
             if not args.no_progress:
-                test_loader.set_description("Test Iter: {batch:4}/{iter:4}. Data: {data:.3f}s. Batch: {bt:.3f}s. Loss: {loss:.4f}. top1: {top1:.2f}. top5: {top5:.2f}. ".format(
+                test_loader.set_description("Test Iter: {batch:4}/{iter:4}. Data: {data:.3f}s. Batch: {bt:.3f}s. Loss: {loss:.4f}. top1: {top1:.2f}. top2: {top2:.2f}. ".format(
                     batch=batch_idx + 1,
                     iter=len(test_loader),
                     data=data_time.avg,
                     bt=batch_time.avg,
                     loss=losses.avg,
                     top1=top1.avg,
-                    top5=top5.avg,
+                    top2=top2.avg,
                 ))
         if not args.no_progress:
             test_loader.close()
 
     logger.info("top-1 acc: {:.2f}".format(top1.avg))
-    logger.info("top-5 acc: {:.2f}".format(top5.avg))
+    logger.info("top-2 acc: {:.2f}".format(top2.avg))
     return losses.avg, top1.avg
 
 
